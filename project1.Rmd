@@ -1,0 +1,100 @@
+---
+title: "proj1"
+author: "Rafke"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project 1
+
+```{r import}
+library("DAAG")
+data(nassCDS)
+names(nassCDS)
+data <- nassCDS
+str(data)
+```
+
+### Question 1 
+
+Let Y_i be an indicator variable which takes the value of 1 if an occupant died in an accident (the variable
+dead) and zero otherwise and let X_i be the year of model of the vehicle (=the year that the car was produced,
+the variable yearVeh). We consider the following GLM:\\ 
+
+$$g(P(Y_i = 1)) = β_0 + β_1X_i.$$
+1. Estimate the model using the classical GLM approach.
+```{r}
+y <- data$dead
+xi <- data$yearVeh
+glm <- glm(
+  y ~ xi,       
+  data   = data,            
+  family = binomial(link="logit") 
+)
+```
+
+2. Let X_10 be the car’s year for which the probability to die is 0.1, P(Y_i = 1) = 0.1. Estimate X_10. Use
+non parametric bootstrap to estimate the distribution of X10 and construct a 95% confidence interval
+for the _10.
+```{r}
+set.seed(33)
+
+p0 <- 0.1
+g  <- log(p0/(1-p0))
+
+b0 <- coef(fit)[1]
+b1 <- coef(fit)[2]
+
+x10_hat <- (g - b0) / b1
+x10_hat
+
+B <- 1000
+n <- nrow(data)
+
+p0 <- 0.1
+g  <- qlogis(p0)  
+
+x10_boot <- numeric(B)
+
+for (b in 1:B) {
+  idx <- sample.int(n, size = n, replace = TRUE)
+  df_b <- data[idx, ]
+
+  fit_b <- glm(dead ~ yearVeh, data = df_b, family = binomial(link = "logit"))
+  bb <- coef(fit_b)
+
+  # handle rare degenerate fits
+  if (any(is.na(bb)) || bb["yearVeh"] == 0) {
+    x10_boot[b] <- NA_real_
+  } else {
+    x10_boot[b] <- (g - bb["(Intercept)"]) / bb["yearVeh"]
+  }
+}
+
+x10_boot <- x10_boot[is.finite(x10_boot)]
+
+CI <- quantile(x10_boot, probs = c(0.025, 0.975), na.rm = TRUE)
+
+list(
+  x10_hat = x10_hat,
+  CI_percentile = CI
+)
+
+```
+
+3. For the model formulated above, we focus on the odds ratio (OR) for a unit increased of the year in
+which the car was produced. Estimate the OR and use parametric bootstrap to test the null hypothesis
+H0 : OR= 1.
+
+```{r}
+
+```
+
+4. Consider a car that was produced in 1996. Let $$π_1996$$ be the probability to die when driving a car that
+was produced in 1996. Estimate $$π_1996$$ and construct a 95% confidence interval for $$π_1996$$.
