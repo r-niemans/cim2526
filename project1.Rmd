@@ -15,8 +15,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r import}
 library("DAAG")
+library(bootstrap)
 data(nassCDS)
 names(nassCDS)
+data <- na.omit(nassCDS[, c("dead", "yearVeh")])
 data <- nassCDS
 str(data)
 ```
@@ -37,54 +39,41 @@ glm <- glm(
   data   = data,            
   family = binomial(link="logit") 
 )
+glm$coefficients[1]
 ```
+
+
+Distribution of the response $$Y \sim B(1,\pi_{ij})$$
+Systematic part $$\pi_j = f(\beta_0 + \beta_1 \times year_{10}) = f(\eta)$$
 
 2. Let X_10 be the car’s year for which the probability to die is 0.1, P(Y_i = 1) = 0.1. Estimate X_10. Use
 non parametric bootstrap to estimate the distribution of X10 and construct a 95% confidence interval
 for the _10.
+
 ```{r}
-set.seed(33)
-
-p0 <- 0.1
-g  <- log(p0/(1-p0))
-
-b0 <- coef(fit)[1]
-b1 <- coef(fit)[2]
-
-x10_hat <- (g - b0) / b1
+p <- 0.1
+G <- qlogis(p)                     
+b0  <- glm$coefficients[1]
+b1 <- glm$coefficients[2]
+x10_hat <- (G - b0) / b1
 x10_hat
 
-B <- 1000
+set.seed(33)
+boot <- 10000
 n <- nrow(data)
+x10_boot <- numeric(boot)
 
-p0 <- 0.1
-g  <- qlogis(p0)  
-
-x10_boot <- numeric(B)
-
-for (b in 1:B) {
-  idx <- sample.int(n, size = n, replace = TRUE)
-  df_b <- data[idx, ]
-
-  fit_b <- glm(dead ~ yearVeh, data = df_b, family = binomial(link = "logit"))
-  bb <- coef(fit_b)
-
-  # handle rare degenerate fits
-  if (any(is.na(bb)) || bb["yearVeh"] == 0) {
-    x10_boot[b] <- NA_real_
-  } else {
-    x10_boot[b] <- (g - bb["(Intercept)"]) / bb["yearVeh"]
-  }
+for (b in 1:boot) {
+  idx <- sample.int(n, n, replace = TRUE)
+  d_b <- data[idx, ]
+  glm_boot <- glm(dead ~ yearVeh, data = d_b, family = binomial(link = "logit"))
+  b0_boot <- coef(glm_boot)[1]
+  b1_boot <- coef(glm_boot)[2]
+  x10_boot[b] <- (G - b0_boot) / b1_boot
 }
 
-x10_boot <- x10_boot[is.finite(x10_boot)]
-
-CI <- quantile(x10_boot, probs = c(0.025, 0.975), na.rm = TRUE)
-
-list(
-  x10_hat = x10_hat,
-  CI_percentile = CI
-)
+CI_x10 <- quantile(x10_boot, probs = c(0.025, 0.975), na.rm = TRUE)
+CI_x10
 
 ```
 
@@ -93,8 +82,164 @@ which the car was produced. Estimate the OR and use parametric bootstrap to test
 H0 : OR= 1.
 
 ```{r}
+b1_hat <- coef(fit)["yearVeh"]
+OR_hat <- exp(b1_hat)
+OR_hat
 
+
+fit0 <- glm(dead ~ 1, data = d, family = binomial(link = "logit"))
+p_null <- fitted(fit0) # constant probability under H0
+
+set.seed(1)
+B <- 2000
+b1_null <- numeric(B)
+
+for (i in 1:B) {
+  y_star <- rbinom(n, size = 1, prob = p_null[1])   # generate under H0 (p.115 logic)
+  d_star <- data.frame(dead = y_star, yearVeh = d$yearVeh)
+  fit_star <- glm(dead ~ yearVeh, data = d_star, family = binomial(link = "logit"))
+  b1_null[i] <- coef(fit_star)["yearVeh"]
+}
+
+# Monte Carlo p-value (two-sided) using beta1 as test statistic
+p_val <- mean(abs(b1_null) >= abs(b1_hat), na.rm = TRUE)
+p_val
 ```
 
 4. Consider a car that was produced in 1996. Let $$π_1996$$ be the probability to die when driving a car that
 was produced in 1996. Estimate $$π_1996$$ and construct a 95% confidence interval for $$π_1996$$.
+
+```{r}
+x0 <- 1996
+eta_1996 <- coef(fit)["(Intercept)"] + coef(fit)["yearVeh"] * x0
+pi_1996_hat <- plogis(eta_1996)
+pi_1996_hat
+
+set.seed(33)
+B <- 1000
+pi_1996_boot <- numeric(B)
+
+for (b in 1:B) {
+  idx <- sample.int(n, n, replace = TRUE)
+  d_b <- d[idx, ]
+  fit_b <- glm(dead ~ yearVeh, data = d_b, family = binomial(link = "logit"))
+  eta_b <- coef(fit_b)["(Intercept)"] + coef(fit_b)["yearVeh"] * x0
+  pi_1996_boot[b] <- plogis(eta_b)
+}
+
+CI_pi_1996 <- quantile(pi_1996_boot, probs = c(0.025, 0.975), na.rm = TRUE)
+CI_pi_1996
+```
+
+
+## Question 2
+
+In this question we focus on the age of the age of occupant in years (the variable ageOFocc) and the injury severity (the variable injSeverity). For the analysis, select only observations for which injSeverity is smaller than 5. Note that, after filtering, the variable injSeverity is a numerical variable with the values: 
+- 0 = none
+- 1 = possible injury
+- 2 = no incapacity
+- 3 = incapacity
+- 4 = killed
+
+1. Calculate the mean age by injury severity.
+
+```{r}
+severity_subset <- subset(nassCDS, injSeverity < 5, select = c(ageOFocc, injSeverity))
+severity_subset <- na.omit(data)
+
+severity_subset$injSeverity <- factor(severity_subset$injSeverity,
+                        levels = 0:4,
+                        labels = c("None","Possible injury","No incapacity","Incapacity","Killed"))
+
+tapply(severity_subset$ageOFocc, severity_subset$injSeverity, mean)
+```
+
+2. Use a non parametric bootstrap procedure to test the null hypothesis mean age of the occupant is equal across all injury severity groups.
+
+```{r}
+fit_obs <- aov(ageOFocc ~ injSeverity, data = severity_subset)
+F_obs <- summary(fit_obs)[[1]][["F value"]][1]
+
+set.seed(33)
+boot <- 10000
+n <- nrow(severity_subset)
+index <- 1:n
+F_boot <- numeric(boot)
+
+for (b in 1:boot) {
+  d_b <- severity_subset
+  d_b$injSeverity <- sample(d_b$injSeverity, replace = FALSE)
+  fit_b <- aov(ageOFocc ~ injSeverity, data = d_b)
+  F_boot[b] <- summary(fit_b)[[1]][["F value"]][1]
+}
+
+p_val <- mean(F_boot >= F_obs, na.rm = TRUE)
+c(F_obs = F_obs, p_value = p_val)
+```
+
+3. Let µnone and µkilled be the mean age of occupant for the groups with injury severity “None” and
+“Killed”, respectively. Use parametric bootstrap to estimate a 95% confidence interval for the difference
+µnone−µkilled.
+
+```{r}
+# group stats
+x_none   <- na.omit(severity_subset$ageOFocc[severity_subset$injSeverity == "None"])
+x_killed <- na.omit(severity_subset$ageOFocc[severity_subset$injSeverity == "Killed"])
+
+mu_none   <- mean(x_none)
+mu_killed <- mean(x_killed)
+sd_none   <- sd(x_none)
+sd_killed <- sd(x_killed)
+
+diff_hat <- mu_none - mu_killed
+
+set.seed(33)
+B <- 10000
+diff_star <- numeric(B)
+
+n_none   <- length(x_none)
+n_killed <- length(x_killed)
+
+for (b in 1:B) {
+  none_star   <- rnorm(n_none,   mean = mu_none,   sd = sd_none)
+  killed_star <- rnorm(n_killed, mean = mu_killed, sd = sd_killed)
+  diff_star[b] <- mean(none_star) - mean(killed_star)
+}
+
+CI_diff <- quantile(diff_star, probs = c(0.025, 0.975), na.rm = TRUE)
+list(diff_hat = diff_hat, CI_95 = CI_diff)
+
+```
+
+## Question 3 
+
+In this question we focus of the following 2 ×2 table (for the complete case analysis) for the variables seat
+belt usage (the variable seatbelt) and the accident outcome (the variable dead).
+
+```{r}
+table(severity_subset$seatbelt, severity_subset$dead)
+```
+
+1. Define the observation unit (Xi,Yi) for the question.
+```{r}
+
+```
+
+2. Calculate the odds ratio for usage of seat belt and accident outcome (dead/alive) and construct a 95%
+confidence interval for the OR. You can use the R function oddsratio. What is your conclusion ? Do
+you think that usage of seat belt influences the accident outcome ?
+3. Use non-parametric bootstrap to construct a 95%
+confidence interval for the OR.
+4. Use parametric bootstrap to test the hypothesis that usage of seat belt does not influence the accident
+outcome using a chi-square test for a 2 ×2 table.
+
+## Question 4 
+
+In this question we focus on the variables: usage of seat belt (the variable seatbelt) and gender (the variable
+sex).
+1. Estimate the proportion of male (πM ) and female (πF ) who used seat belt.
+2. Test the hypothesis that the proportion of male and female that use seat belt are equal using a classical
+two-samples test.
+3. Use non parametric bootstrap to test the hypothesis that the proportion of male and female that use
+seat belt in an accidents are equal.
+4. Use parametric bootstrap construct a 95% confident interval for πM−πF.
