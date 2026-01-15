@@ -18,6 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r import}
 library("DAAG")
 library(bootstrap)
+library(questionr) 
 data(nassCDS)
 names(nassCDS)
 data <- na.omit(nassCDS)
@@ -41,89 +42,98 @@ dead <- as.integer(as.character(data$dead))
 total_n <- nrow(data)
 proportiondead <-dead/total_n
 alive <-total_n-dead
-par(mfrow=c(1,1))
-plot(data$yearVeh, dead, main="Proportion of the people that died",ylim=c(0,1))
+
 dead_by_year  <- tapply(dead, data$yearVeh, sum, na.rm = TRUE)
 total_by_year <- tapply(dead, data$yearVeh, length)
 alive_by_year <- total_by_year - dead_by_year
 prop_by_year  <- dead_by_year / total_by_year
 
 year <- as.numeric(names(prop_by_year))
-
+par(mfrow=c(1,1))
 plot(year, prop_by_year,
      main="Proportion of the people that died",
      ylim=c(0,1), xlab="yearVeh", ylab="proportion dead")
 
 fit.accidents <- glm(cbind(dead_by_year, alive_by_year) ~ year,
                      family = binomial(link="logit"))
+
 ord <- order(year)
 lines(year[ord], fitted(fit.accidents)[ord])
 ```
 
+The plot suggests that the **proportion of occupants who died decreases as vehicle model year increases**. Older vehicles (roughly the 1950s–1970s) show higher and more variable death proportions, while for newer model years (around the mid-1980s onward) the death proportion is **low and fairly stable**, close to zero. The fitted logistic trend line slopes downward, indicating a **negative association** between vehicle year and the probability of death—consistent with improved vehicle safety in newer cars.
 
 Distribution of the response $$Y \sim B(1,\pi_{ij})$$
-Systematic part $$\pi_j = f(\beta_0 + \beta_1 \times year_{10}) = f(\eta)$$
+Systematic part $$\eta_i= \beta_0 + \beta_1 \times yearVeh_i$$
 
 2. Let X_10 be the car’s year for which the probability to die is 0.1, P(Y_i = 1) = 0.1. Estimate X_10. Use
 non parametric bootstrap to estimate the distribution of X10 and construct a 95% confidence interval
 for the _10.
 
+We resample row indices/ bootstrap coefficients $$\beta_0, \beta_1$$ and then estimate the distribution by means of nonparametric bootstrapping results for both $$\beta$$ values.
+
 ```{r}
-p <- 0.1
-G <- qlogis(p)                     
-b0  <- glm$coefficients[1]
-b1 <- glm$coefficients[2]
-x10_hat <- (G - b0) / b1
-x10_hat
+y <- as.integer(as.character(data$dead))
+x <- data$yearVeh
 
-set.seed(33)
-boot <- 1000
+B <- 2000
 n <- nrow(data)
-x10_boot <- numeric(boot)
 
-for (b in 1:boot) {
-  idx <- sample.int(n, n, replace = TRUE)
-  d_b <- data[idx, ]
-  glm_boot <- glm(dead ~ yearVeh, data = d_b, family = binomial(link = "logit"))
-  b0_boot <- coef(glm_boot)[1]
-  b1_boot <- coef(glm_boot)[2]
-  x10_boot[b] <- (G - b0_boot) / b1_boot
+beta0 <- numeric(B)
+beta1 <- numeric(B)
+
+for (b in 1:B) {
+  idx <- sample.int(n, n, replace=TRUE)
+  fit_b <- glm(y[idx] ~ x[idx], family=binomial(link="logit"))
+  beta_coefs<- coef(fit_b)
+  beta0[b] <- beta_coefs[1]
+  beta1[b] <- beta_coefs[2]
 }
 
-CI_x10 <- quantile(x10_boot, probs = c(0.025, 0.975), na.rm = TRUE)
-CI_x10
+prob01 <- log(0.1/0.9)
+X10 <- (prob01 - beta0) / beta1
 
 ```
+
+```{r}
+par(mfrow=c(1,2))
+hist(beta0,nclass=50)
+hist(beta1,nclass=50)
+hist(X10, nclass=50)
+
+quantile(X10, c(0.025, 0.975), na.rm=TRUE)
+```
+
+$$\beta_1 < 0$$ means: as vehicle year increases, the log-odds of dying decrease, so the probability of death goes down for newer model years.
+
+The histogram implies that cars around the early 1970s (~ 1971-1973) correspond to a 10% death probability.
 
 3. For the model formulated above, we focus on the odds ratio (OR) for a unit increased of the year in
 which the car was produced. Estimate the OR and use parametric bootstrap to test the null hypothesis
 H0 : OR= 1.
 
 ```{r}
-data$dead <- ifelse(data$dead=="alive", 1, 0)
-```
-
-
-```{r}
-b1_hat <- glm$coefficients[2]
-OR_hat <- exp(b1_hat)
+y <- data$dead
+x <- data$yearVeh
+glm.fit <- glm(y ~ x, family = binomial(link="logit"), data = data)
+OR_hat <- exp(coef(glm.fit)[2])
 OR_hat
 
-glm0 <- glm(dead ~ 1, data = data, family = binomial(link = "logit"))
-p_null <- glm(glm0) # constant probability under H0
+fit_null <- glm(y ~ 1, family=binomial)
+p0 <- fitted(fit_null)[1]   
 
 set.seed(33)
 B <- 2000
-b1_null <- numeric(B)
+n <- length(y)
+OR_b <- numeric(B)
 
-for (i in 1:B) {
-  y_star <- rbinom(n, size = 1, prob = p_null[1]) 
-  d_star <- data.frame(dead = y_star, yearVeh = data$yearVeh)
-  glm_star <- glm(dead ~ yearVeh, data = d_star, family = binomial(link = "logit"))
-  b1_null[i] <- coef(glm_star)["yearVeh"]
+for (b in 1:B) {
+  yb <- rbinom(n, 1, p0)                 # H0
+  fit_b <- glm(yb ~ x, family=binomial)  # and then full model
+  OR_b[b] <- exp(coef(fit_b)[2])
 }
 
-p_val <- mean(abs(b1_null) >= abs(b1_hat), na.rm = TRUE)
+p_val <- mean(abs(log(OR_b)) >= abs(log(OR_hat)))
 p_val
 ```
 
@@ -131,27 +141,26 @@ p_val
 was produced in 1996. Estimate $$π_1996$$ and construct a 95% confidence interval for $$π_1996$$.
 
 ```{r}
-x0 <- 1996
-eta_1996 <- glm$coefficients[1] + glm$coefficients[2] * x0
-pi_1996_hat <- plogis(eta_1996)
-pi_1996_hat
-
 set.seed(33)
-B <- 1000
-pi_1996_boot <- numeric(B)
+B <- 2000
+n <- nrow(data)
+
+pi1996_b <- numeric(B)
 
 for (b in 1:B) {
-  idx <- sample.int(n, n, replace = TRUE)
-  d_b <- data[idx, ]
-  glm_b <- glm(dead ~ yearVeh, data = d_b, family = binomial(link = "logit"))
-  eta_b <- coef(glm_b)["(Intercept)"] + coef(glm_b)["yearVeh"] * x0
-  pi_1996_boot[b] <- plogis(eta_b)
+  idx <- sample.int(n, n, replace=TRUE)
+  fit_b <- glm(dead ~ yearVeh, family=binomial(link="logit"), data=data[idx, ])
+  pi1996_b[b] <- predict(fit_b, newdata=data.frame(yearVeh=1996), type="response")
 }
 
-CI_pi_1996 <- quantile(pi_1996_boot, probs = c(0.025, 0.975), na.rm = TRUE)
-CI_pi_1996
-```
+fit <- glm(dead ~ yearVeh, family=binomial, data=data)
+pi_hat <- predict(fit, newdata=data.frame(yearVeh=1996), type="response")
+CI <- quantile(pi1996_b, c(0.025, 0.975), na.rm=TRUE)
 
+pi_hat
+CI
+```
+The estimated probability of dying in an accident when driving a car produced in 1996 is about 3.6–4.1% (CI 95%), hinting at a relatively small uncertainty.
 
 ## Question 2
 
@@ -182,7 +191,7 @@ fit_obs <- aov(ageOFocc ~ injSeverity, data = severity_subset)
 F_obs <- summary(fit_obs)[[1]][["F value"]][1]
 
 set.seed(33)
-boot <- 10000
+boot <- 2000
 n <- nrow(severity_subset)
 index <- 1:n
 F_boot <- numeric(boot)
@@ -198,14 +207,44 @@ p_val <- mean(F_boot >= F_obs, na.rm = TRUE)
 c(F_obs = F_obs, p_value = p_val)
 ```
 
+F=78.30: the observed ANOVA F-statistic from your real data, which is very large, meaning the differences between group means are big relative to within-group variation.
+
+p-value = 0.00000 (with 2000 permutations): none produced an F-statistic as large as 78.30.
+
+```{r}
+severity_subset$injSeverity <- factor(severity_subset$injSeverity)
+
+g <- severity_subset$injSeverity
+y <- severity_subset$ageOFocc
+
+means <- tapply(y, g, mean, na.rm = TRUE)
+ns    <- tapply(y, g, function(z) sum(!is.na(z)))
+sds   <- tapply(y, g, sd, na.rm = TRUE)
+
+se  <- sds / sqrt(ns)
+tcr <- qt(0.975, df = ns - 1)
+lower <- means - tcr * se
+upper <- means + tcr * se
+
+# Plot (mean points + CI error bars)
+x <- seq_along(means)
+plot(x, means, xaxt="n", xlab="injSeverity", ylab="Mean ageOfOcc",
+     main="Mean occupant age by injury severity (95% CI)",
+     ylim = range(c(lower, upper), na.rm=TRUE))
+axis(1, at=x, labels=names(means), las=1, cex.axis=0.8)
+
+arrows(x, lower, x, upper, angle=90, code=3, length=0.05)
+points(x, means, pch=19)
+```
+
 3. Let µnone and µkilled be the mean age of occupant for the groups with injury severity “None” and
 “Killed”, respectively. Use parametric bootstrap to estimate a 95% confidence interval for the difference
 µnone−µkilled.
 
 ```{r}
 # group stats
-x_none   <- na.omit(severity_subset$ageOFocc[severity_subset$injSeverity == "None"])
-x_killed <- na.omit(severity_subset$ageOFocc[severity_subset$injSeverity == "Killed"])
+x_none   <- severity_subset$ageOFocc[severity_subset$injSeverity == "None"]
+x_killed <- severity_subset$ageOFocc[severity_subset$injSeverity == "Killed"]
 
 mu_none   <- mean(x_none)
 mu_killed <- mean(x_killed)
@@ -216,21 +255,22 @@ diff_hat <- mu_none - mu_killed
 
 set.seed(33)
 B <- 10000
-diff_star <- numeric(B)
+diff <- numeric(B)
 
 n_none   <- length(x_none)
 n_killed <- length(x_killed)
 
 for (b in 1:B) {
-  none_star   <- rnorm(n_none,   mean = mu_none,   sd = sd_none)
-  killed_star <- rnorm(n_killed, mean = mu_killed, sd = sd_killed)
-  diff_star[b] <- mean(none_star) - mean(killed_star)
+  none_sev   <- rnorm(n_none,   mean = mu_none,   sd = sd_none)
+  killed_sev <- rnorm(n_killed, mean = mu_killed, sd = sd_killed)
+  diff[b] <- mean(none_sev) - mean(killed_sev)
 }
 
-CI_diff <- quantile(diff_star, probs = c(0.025, 0.975), na.rm = TRUE)
+CI_diff <- quantile(diff, probs = c(0.025, 0.975), na.rm = TRUE)
 list(diff_hat = diff_hat, CI_95 = CI_diff)
 
 ```
+Negative result interval ndicated that 'None' injury severity group are younger on average than 'Killed' group occupants. Difference is 7.5-10 years.
 
 ## Question 3 
 
@@ -238,9 +278,9 @@ In this question we focus of the following 2 ×2 table (for the complete case an
 belt usage (the variable seatbelt) and the accident outcome (the variable dead).
 
 ```{r}
-severity_subset <- data[, c("seatbelt","dead")]
-severity_subset <- na.omit(severity_subset)
-table(severity_subset$seatbelt, severity_subset$dead)
+data <- na.omit(nassCDS)
+seatbelt_subset <- data[, c("seatbelt","dead")]
+table(seatbelt_subset$seatbelt, severity_subset$dead)
 ```
 
 1. Define the observation unit (Xi,Yi) for the question.
@@ -260,7 +300,6 @@ confidence interval for the OR. You can use the R function oddsratio. What is yo
 you think that usage of seat belt influences the accident outcome ?
 
 ```{r}
-library(questionr)
 tab <- table(xi,y)
 odds.ratio(tab, na.rm=TRUE, level=0.95)
 ```
