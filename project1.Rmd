@@ -95,13 +95,12 @@ B <- 2000
 b1_null <- numeric(B)
 
 for (i in 1:B) {
-  y_star <- rbinom(n, size = 1, prob = p_null[1])   # generate under H0 (p.115 logic)
+  y_star <- rbinom(n, size = 1, prob = p_null[1]) 
   d_star <- data.frame(dead = y_star, yearVeh = d$yearVeh)
   fit_star <- glm(dead ~ yearVeh, data = d_star, family = binomial(link = "logit"))
   b1_null[i] <- coef(fit_star)["yearVeh"]
 }
 
-# Monte Carlo p-value (two-sided) using beta1 as test statistic
 p_val <- mean(abs(b1_null) >= abs(b1_hat), na.rm = TRUE)
 p_val
 ```
@@ -145,7 +144,7 @@ In this question we focus on the age of the age of occupant in years (the variab
 
 ```{r}
 severity_subset <- subset(nassCDS, injSeverity < 5, select = c(ageOFocc, injSeverity))
-severity_subset <- na.omit(data)
+severity_subset <- na.omit(severity_subset)
 
 severity_subset$injSeverity <- factor(severity_subset$injSeverity,
                         levels = 0:4,
@@ -217,29 +216,167 @@ In this question we focus of the following 2 ×2 table (for the complete case an
 belt usage (the variable seatbelt) and the accident outcome (the variable dead).
 
 ```{r}
+severity_subset <- data[, c("seatbelt","dead")]
+severity_subset <- na.omit(severity_subset)
 table(severity_subset$seatbelt, severity_subset$dead)
 ```
 
 1. Define the observation unit (Xi,Yi) for the question.
-```{r}
+$$
+Y_{ij}\in\{0,1\}
+\quad\text{and}\quad
+\pi = P(Y=1).
+$$
 
+```{r}
+xi <- severity_subset$seatbelt
+y <- severity_subset$dead
 ```
 
 2. Calculate the odds ratio for usage of seat belt and accident outcome (dead/alive) and construct a 95%
 confidence interval for the OR. You can use the R function oddsratio. What is your conclusion ? Do
 you think that usage of seat belt influences the accident outcome ?
+
+```{r}
+library(questionr)
+tab <- table(xi,y)
+odds.ratio(tab, na.rm=TRUE, level=0.95)
+```
+
 3. Use non-parametric bootstrap to construct a 95%
 confidence interval for the OR.
+
+```{r}
+set.seed(33)
+B <- 10000
+n <- nrow(severity_subset)
+index <- 1:n
+or_boot <- numeric(B)
+
+OR_from_tab <- function(tt){
+  if (any(tt == 0)) tt <- tt + 0.5
+  (tt[2,2] * tt[1,1]) / (tt[2,1] * tt[1,2])
+}
+
+for (b in 1:B) {
+  idx <- sample(index, size = n, replace = TRUE)
+  d_b <- severity_subset[idx, ]
+  tt  <- table(d_b$seatbelt, d_b$dead)
+  tt <- tt[rownames(tab), colnames(tab)]
+  or_boot[b] <- OR_from_tab(tt)
+}
+
+CI_or_np <- quantile(or_boot, probs = c(0.025, 0.975), na.rm = TRUE)
+CI_or_np
+```
+
 4. Use parametric bootstrap to test the hypothesis that usage of seat belt does not influence the accident
 outcome using a chi-square test for a 2 ×2 table.
+
+```{r}
+tab <- table(severity_subset$seatbelt, severity_subset$dead)
+
+chisq_obs <- suppressWarnings(chisq.test(tab, correct = FALSE)$statistic)
+
+set.seed(33)
+B <- 10000
+n_tot <- sum(tab)
+
+p_row <- prop.table(tab, 1) %*% c(1,1)     # row marginals
+p_col <- c(1,1) %*% prop.table(tab, 2)     # col marginals
+p_cell <- as.vector(p_row %o% p_col)      
+
+chisq_star <- numeric(B)
+
+for (b in 1:B) {
+  tt_vec <- as.vector(rmultinom(1, size = n_tot, prob = p_cell))
+  tt <- matrix(tt_vec, nrow = 2, byrow = FALSE)
+  dimnames(tt) <- dimnames(tab)
+  chisq_star[b] <- suppressWarnings(chisq.test(tt, correct = FALSE)$statistic)
+}
+
+p_val <- mean(chisq_star >= chisq_obs, na.rm = TRUE)
+c(chisq_obs = chisq_obs, p_value = p_val)
+
+```
+
 
 ## Question 4 
 
 In this question we focus on the variables: usage of seat belt (the variable seatbelt) and gender (the variable
 sex).
 1. Estimate the proportion of male (πM ) and female (πF ) who used seat belt.
+
+```{r}
+d_gender <- na.omit(nassCDS[, c("seatbelt","sex")])
+
+if (is.factor(d_gender$seatbelt)) {
+  d_gender$seatbelt01 <- as.integer(d_gender$seatbelt == levels(d_gender$seatbelt)[2])
+} else {
+  d_gender$seatbelt01 <- as.integer(d_gender$seatbelt)
+}
+
+pi_M <- mean(d_gender$seatbelt01[d_gender$sex == "M"])
+pi_F <- mean(d_gender$seatbelt01[d_gender$sex == "F"])
+c(pi_M = pi_M, pi_F = pi_F)
+```
+
 2. Test the hypothesis that the proportion of male and female that use seat belt are equal using a classical
 two-samples test.
+```{r}
+xM <- sum(d_gender$seatbelt01[d_gender$sex == "M"] == 1)
+nM <- sum(d_gender$sex == "M")
+xF <- sum(d_gender$seatbelt01[d_gender$sex == "F"] == 1)
+nF <- sum(d_gender$sex == "F")
+
+prop.test(x = c(xM, xF), n = c(nM, nF), correct = FALSE)
+```
+
 3. Use non parametric bootstrap to test the hypothesis that the proportion of male and female that use
 seat belt in an accidents are equal.
+
+```{r}
+set.seed(33)
+B <- 10000
+n <- nrow(d_gender)
+index <- 1:n
+
+delta_obs <- mean(d_gender$seatbelt01[d_gender$sex == "M"]) - mean(d_gender$seatbelt01[d_gender$sex == "F"])
+delta_star <- numeric(B)
+
+# resample rows 
+for (b in 1:B) {
+  idx <- sample(index, size = n, replace = TRUE)
+  d_b <- d_gender[idx, ]
+  delta_star[b] <- mean(d_b$seatbelt01[d_b$sex == "M"]) - mean(d_b$seatbelt01[d_b$sex == "F"])
+}
+
+p_val <- mean(abs(delta_star) >= abs(delta_obs), na.rm = TRUE)
+c(delta_obs = delta_obs, p_value = p_val)
+
+```
+
 4. Use parametric bootstrap construct a 95% confident interval for πM−πF.
+
+```{r}
+set.seed(33)
+B <- 10000
+
+pi_M_hat <- mean(d_gender$seatbelt01[d_gender$sex == "M"])
+pi_F_hat <- mean(d_gender$seatbelt01[d_gender$sex == "F"])
+
+nM <- sum(d_gender$sex == "M")
+nF <- sum(d_gender$sex == "F")
+
+delta_par <- numeric(B)
+
+for (b in 1:B) {
+  yM <- rbinom(nM, size = 1, prob = pi_M_hat)
+  yF <- rbinom(nF, size = 1, prob = pi_F_hat)
+  delta_par[b] <- mean(yM) - mean(yF)
+}
+
+CI_delta <- quantile(delta_par, probs = c(0.025, 0.975), na.rm = TRUE)
+list(delta_hat = pi_M_hat - pi_F_hat, CI_95 = CI_delta)
+```
+
