@@ -280,7 +280,7 @@ belt usage (the variable seatbelt) and the accident outcome (the variable dead).
 ```{r}
 data <- na.omit(nassCDS)
 seatbelt_subset <- data[, c("seatbelt","dead")]
-table(seatbelt_subset$seatbelt, severity_subset$dead)
+table(seatbelt_subset$seatbelt, seatbelt_subset$dead)
 ```
 
 1. Define the observation unit (Xi,Yi) for the question.
@@ -291,8 +291,8 @@ Y_{ij}\in\{0,1\}
 $$
 
 ```{r}
-xi <- severity_subset$seatbelt
-y <- severity_subset$dead
+xi <- seatbelt_subset$seatbelt
+y <- seatbelt_subset$dead
 ```
 
 2. Calculate the odds ratio for usage of seat belt and accident outcome (dead/alive) and construct a 95%
@@ -301,8 +301,15 @@ you think that usage of seat belt influences the accident outcome ?
 
 ```{r}
 tab <- table(xi,y)
-odds.ratio(tab, na.rm=TRUE, level=0.95)
+tab
+OR <- (500/17965) / (680/6928) 
+OR
 ```
+
+Since the OR is well below 1, wearing a seatbelt is associated with lower odds of death.
+
+Numerically, an OR of 0.28 means the odds of dying for belted occupants are about 72% lower than for unbelted occupants 
+(1-0.283 = 0.717).
 
 3. Use non-parametric bootstrap to construct a 95%
 confidence interval for the OR.
