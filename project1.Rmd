@@ -19,6 +19,9 @@ knitr::opts_chunk$set(echo = TRUE)
 library("DAAG")
 library(bootstrap)
 library(questionr) 
+library(dplyr)
+library(ggplot2)
+
 data(nassCDS)
 names(nassCDS)
 data <- na.omit(nassCDS)
@@ -51,8 +54,8 @@ prop_by_year  <- dead_by_year / total_by_year
 year <- as.numeric(names(prop_by_year))
 par(mfrow=c(1,1))
 plot(year, prop_by_year,
-     main="Proportion of the people that died",
-     ylim=c(0,1), xlab="yearVeh", ylab="proportion dead")
+     main="Proportion of people dying in a car accident",
+     ylim=c(0,1), xlab="Year", ylab="Proportion dead")
 
 fit.accidents <- glm(cbind(dead_by_year, alive_by_year) ~ year,
                      family = binomial(link="logit"))
@@ -174,7 +177,7 @@ In this question we focus on the age of the age of occupant in years (the variab
 1. Calculate the mean age by injury severity.
 
 ```{r}
-severity_subset <- subset(nassCDS, injSeverity < 5, select = c(ageOFocc, injSeverity))
+severity_subset <- na.omit(subset(nassCDS, injSeverity < 5, select = c(ageOFocc, injSeverity)))
 severity_subset <- na.omit(severity_subset)
 
 severity_subset$injSeverity <- factor(severity_subset$injSeverity,
@@ -184,16 +187,59 @@ severity_subset$injSeverity <- factor(severity_subset$injSeverity,
 tapply(severity_subset$ageOFocc, severity_subset$injSeverity, mean)
 ```
 
+
+```{r}
+severity_subset$injSeverity <- factor(severity_subset$injSeverity)
+
+# Summarize mean + 95% CI by group
+sum_df <- severity_subset %>%
+  group_by(injSeverity) %>%
+  summarise(
+    mean = mean(ageOFocc, na.rm = TRUE),
+    n    = sum(!is.na(ageOFocc)),
+    sd   = sd(ageOFocc, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    se   = sd / sqrt(n),
+    tcr  = qt(0.975, df = n - 1),
+    lower = mean - tcr * se,
+    upper = mean + tcr * se
+  )
+
+boxplot_meanage <- ggplot(sum_df, aes(x = injSeverity, y = mean)) +
+  geom_errorbar(aes(ymin = lower, ymax = upper),
+                width = 0.15, linewidth = 0.7) +
+  geom_point(size = 2.6) +
+  labs(
+    title = "Mean occupant age by injury severity",
+    subtitle = "95% confidence intervals",
+    x = "injSeverity",
+    y = "Mean ageOFocc"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "grey30"),
+    panel.grid.major = element_line(linewidth = 0.3),
+    panel.grid.minor = element_line(linewidth = 0.2),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+boxplot_meanage
+```
+
 2. Use a non parametric bootstrap procedure to test the null hypothesis mean age of the occupant is equal across all injury severity groups.
+
+
 
 ```{r}
 fit_obs <- aov(ageOFocc ~ injSeverity, data = severity_subset)
 F_obs <- summary(fit_obs)[[1]][["F value"]][1]
 
 set.seed(33)
-boot <- 2000
+boot <- 1000
 n <- nrow(severity_subset)
-index <- 1:n
 F_boot <- numeric(boot)
 
 for (b in 1:boot) {
@@ -203,39 +249,11 @@ for (b in 1:boot) {
   F_boot[b] <- summary(fit_b)[[1]][["F value"]][1]
 }
 
-p_val <- mean(F_boot >= F_obs, na.rm = TRUE)
+p_val <- (1 + sum(F_boot >= F_obs, na.rm=TRUE)) / (B + 1)
 c(F_obs = F_obs, p_value = p_val)
 ```
 
-F=78.30: the observed ANOVA F-statistic from your real data, which is very large, meaning the differences between group means are big relative to within-group variation.
 
-p-value = 0.00000 (with 2000 permutations): none produced an F-statistic as large as 78.30.
-
-```{r}
-severity_subset$injSeverity <- factor(severity_subset$injSeverity)
-
-g <- severity_subset$injSeverity
-y <- severity_subset$ageOFocc
-
-means <- tapply(y, g, mean, na.rm = TRUE)
-ns    <- tapply(y, g, function(z) sum(!is.na(z)))
-sds   <- tapply(y, g, sd, na.rm = TRUE)
-
-se  <- sds / sqrt(ns)
-tcr <- qt(0.975, df = ns - 1)
-lower <- means - tcr * se
-upper <- means + tcr * se
-
-# Plot (mean points + CI error bars)
-x <- seq_along(means)
-plot(x, means, xaxt="n", xlab="injSeverity", ylab="Mean ageOfOcc",
-     main="Mean occupant age by injury severity (95% CI)",
-     ylim = range(c(lower, upper), na.rm=TRUE))
-axis(1, at=x, labels=names(means), las=1, cex.axis=0.8)
-
-arrows(x, lower, x, upper, angle=90, code=3, length=0.05)
-points(x, means, pch=19)
-```
 
 3. Let µnone and µkilled be the mean age of occupant for the groups with injury severity “None” and
 “Killed”, respectively. Use parametric bootstrap to estimate a 95% confidence interval for the difference
@@ -251,6 +269,7 @@ mu_killed <- mean(x_killed)
 sd_none   <- sd(x_none)
 sd_killed <- sd(x_killed)
 
+print(c(mu_none, mu_killed, sd_none, sd_killed))
 diff_hat <- mu_none - mu_killed
 
 set.seed(33)
@@ -270,7 +289,7 @@ CI_diff <- quantile(diff, probs = c(0.025, 0.975), na.rm = TRUE)
 list(diff_hat = diff_hat, CI_95 = CI_diff)
 
 ```
-Negative result interval ndicated that 'None' injury severity group are younger on average than 'Killed' group occupants. Difference is 7.5-10 years.
+Negative result interval indicated that 'None' injury severity group are younger on average than 'Killed' group occupants. Difference is 7.5-10 years.
 
 ## Question 3 
 
@@ -280,7 +299,8 @@ belt usage (the variable seatbelt) and the accident outcome (the variable dead).
 ```{r}
 data <- na.omit(nassCDS)
 seatbelt_subset <- data[, c("seatbelt","dead")]
-table(seatbelt_subset$seatbelt, seatbelt_subset$dead)
+tab <- table(seatbelt_subset$seatbelt, seatbelt_subset$dead)
+tab 
 ```
 
 1. Define the observation unit (Xi,Yi) for the question.
@@ -300,9 +320,7 @@ confidence interval for the OR. You can use the R function oddsratio. What is yo
 you think that usage of seat belt influences the accident outcome ?
 
 ```{r}
-tab <- table(xi,y)
-tab
-OR <- (500/17965) / (680/6928) 
+OR <- (500/17965) / (680/6918) 
 OR
 ```
 
@@ -316,33 +334,39 @@ confidence interval for the OR.
 
 ```{r}
 set.seed(33)
-B <- 10000
-n <- nrow(severity_subset)
-index <- 1:n
-or_boot <- numeric(B)
 
-OR_from_tab <- function(tt){
-  if (any(tt == 0)) tt <- tt + 0.5
-  (tt[2,2] * tt[1,1]) / (tt[2,1] * tt[1,2])
-}
+alive_none  <- 6918
+dead_none   <- 680
+alive_belt  <- 17965
+dead_belt   <- 500
 
-for (b in 1:B) {
-  idx <- sample(index, size = n, replace = TRUE)
-  d_b <- severity_subset[idx, ]
-  tt  <- table(d_b$seatbelt, d_b$dead)
-  tt <- tt[rownames(tab), colnames(tab)]
-  or_boot[b] <- OR_from_tab(tt)
-}
+OR_hat <- (dead_belt / alive_belt) / (dead_none / alive_none)
 
-CI_or_np <- quantile(or_boot, probs = c(0.025, 0.975), na.rm = TRUE)
-CI_or_np
+
+B <- 20000
+N <- alive_none + dead_none + alive_belt + dead_belt
+p <- c(alive_none, dead_none, alive_belt, dead_belt) / N
+
+boot_counts <- rmultinom(B, size = N, prob = p)
+an <- boot_counts[1,]
+dn <- boot_counts[2,]
+ab <- boot_counts[3,]
+db <- boot_counts[4,]
+
+OR_boot <- (db / ab) / (dn / an)
+
+CI <- quantile(OR_boot, c(0.025, 0.975), na.rm = TRUE)
+
+c(OR = OR_hat, CI_low = CI[1], CI_high = CI[2])
+
+
 ```
 
 4. Use parametric bootstrap to test the hypothesis that usage of seat belt does not influence the accident
 outcome using a chi-square test for a 2 ×2 table.
 
 ```{r}
-tab <- table(severity_subset$seatbelt, severity_subset$dead)
+tab <- table(seatbelt_subset$seatbelt, seatbelt_subset$dead)
 
 chisq_obs <- suppressWarnings(chisq.test(tab, correct = FALSE)$statistic)
 
@@ -350,8 +374,8 @@ set.seed(33)
 B <- 10000
 n_tot <- sum(tab)
 
-p_row <- prop.table(tab, 1) %*% c(1,1)     # row marginals
-p_col <- c(1,1) %*% prop.table(tab, 2)     # col marginals
+p_row <- prop.table(tab, 1) %*% c(1,1)  
+p_col <- c(1,1) %*% prop.table(tab, 2)
 p_cell <- as.vector(p_row %o% p_col)      
 
 chisq_star <- numeric(B)
@@ -363,7 +387,9 @@ for (b in 1:B) {
   chisq_star[b] <- suppressWarnings(chisq.test(tt, correct = FALSE)$statistic)
 }
 
-p_val <- mean(chisq_star >= chisq_obs, na.rm = TRUE)
+
+p_val <- (1 + sum(chisq_star >= chisq_obs, na.rm = TRUE)) / (B + 1)
+
 c(chisq_obs = chisq_obs, p_value = p_val)
 
 ```
@@ -376,28 +402,57 @@ sex).
 1. Estimate the proportion of male (πM ) and female (πF ) who used seat belt.
 
 ```{r}
-d_gender <- na.omit(nassCDS[, c("seatbelt","sex")])
-
-if (is.factor(d_gender$seatbelt)) {
-  d_gender$seatbelt01 <- as.integer(d_gender$seatbelt == levels(d_gender$seatbelt)[2])
-} else {
-  d_gender$seatbelt01 <- as.integer(d_gender$seatbelt)
-}
-
-pi_M <- mean(d_gender$seatbelt01[d_gender$sex == "M"])
-pi_F <- mean(d_gender$seatbelt01[d_gender$sex == "F"])
-c(pi_M = pi_M, pi_F = pi_F)
+sex_df <- na.omit(nassCDS[c('sex','seatbelt')])
+table(sex_df$sex, sex_df$seatbelt)
+prop.table(table(sex_df$sex, sex_df$seatbelt), margin = 1)
 ```
 
 2. Test the hypothesis that the proportion of male and female that use seat belt are equal using a classical
 two-samples test.
 ```{r}
-xM <- sum(d_gender$seatbelt01[d_gender$sex == "M"] == 1)
-nM <- sum(d_gender$sex == "M")
-xF <- sum(d_gender$seatbelt01[d_gender$sex == "F"] == 1)
-nF <- sum(d_gender$sex == "F")
+set.seed(33)
+B <- 1000
 
-prop.test(x = c(xM, xF), n = c(nM, nF), correct = FALSE)
+f_none   <- 2863
+f_belted <- 9385
+m_none   <- 4781
+m_belted <- 9188
+
+nF <- f_none + f_belted
+nM <- m_none + m_belted
+
+x <- c(rep(1, f_belted), rep(0, f_none))
+y <- c(rep(1, m_belted), rep(0, m_none))
+z <- c(x, y)
+mn <- length(z)
+
+t.obs <- as.numeric(t.test(x, y)$statistic)
+t.boot <- numeric(B)
+for (b in seq_len(B)) {
+  z.b <- sample(z, size = mn, replace = TRUE)
+  x.b <- z.b[1:nF]
+  y.b <- z.b[(nF + 1):mn]
+  t.boot[b] <- as.numeric(t.test(x.b, y.b)$statistic)
+}
+
+#monte carlo p-value
+Pmc <- (1 + sum(t.boot > t.obs)) / (B + 1)
+diff.boot <- numeric(B)
+for (b in seq_len(B)) {
+  z.b <- sample(z, size = mn, replace = TRUE)
+  x.b <- z.b[1:nF]
+  y.b <- z.b[(nF + 1):mn]
+  diff.boot[b] <- mean(x.b) - mean(y.b)
+}
+
+ci_boot <- quantile(diff.boot, probs = c(0.025, 0.975))
+cat("Observed t-statistic:", t.obs, "\n")
+cat("Pmc (one-sided, upper):", Pmc, "\n")
+cat("Bootstrap 95% percentile CI for (pi_F - pi_M):", ci_boot[1], "to", ci_boot[2], "\n")
+hist(diff.boot, breaks = 40, main = expression("Bootstrap distribution of " ~ hat(pi)[F] - hat(pi)[M]), xlab = expression(hat(pi)[F] - hat(pi)[M]))
+abline(v = mean(diff.boot), col = "blue", lwd = 2)
+abline(v = ci_boot, col = "darkgreen", lwd = 2, lty = 2)
+
 ```
 
 3. Use non parametric bootstrap to test the hypothesis that the proportion of male and female that use
