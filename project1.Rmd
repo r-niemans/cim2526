@@ -1,5 +1,5 @@
 ---
-title: "proj1"
+title: "Project 1"
 author: "Rafke"
 date: "`r Sys.Date()`"
 output:
@@ -15,13 +15,16 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Project 1
 
+Code to guide answers from Project 1. 
+
 ```{r import}
 library("DAAG")
 library(bootstrap)
 library(questionr) 
 library(dplyr)
 library(ggplot2)
-
+library(MASS)
+library(grid)
 data(nassCDS)
 names(nassCDS)
 data <- na.omit(nassCDS)
@@ -259,35 +262,79 @@ c(F_obs = F_obs, p_value = p_val)
 “Killed”, respectively. Use parametric bootstrap to estimate a 95% confidence interval for the difference
 µnone−µkilled.
 
+First, let's check the distribution. 
+
 ```{r}
-# group stats
+
+g_none <- glm(x_none ~ 1, family = Gamma(link="log"))
+g_k    <- glm(x_killed ~ 1, family = Gamma(link="log"))
+
 x_none   <- severity_subset$ageOFocc[severity_subset$injSeverity == "None"]
 x_killed <- severity_subset$ageOFocc[severity_subset$injSeverity == "Killed"]
 
-mu_none   <- mean(x_none)
-mu_killed <- mean(x_killed)
-sd_none   <- sd(x_none)
-sd_killed <- sd(x_killed)
+df_long <- rbind(
+  data.frame(group = "None",   age = x_none),
+  data.frame(group = "Killed", age = x_killed)
+)
 
-print(c(mu_none, mu_killed, sd_none, sd_killed))
-diff_hat <- mu_none - mu_killed
+df_long <- subset(df_long, is.finite(age))
 
-set.seed(33)
-B <- 10000
-diff <- numeric(B)
+ggplot(df_long, aes(x = age, fill = group)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 bins = 30,
+                 color = "white",
+                 alpha = 0.75) +
+  geom_density(aes(color = group), linewidth = 1, fill = NA) +
+  facet_wrap(~ group, nrow = 1, scales = "free_y") +
+  scale_fill_manual(values = c("None" = "#6475ED", "Killed" = "#FF8C00")) +
+  scale_color_manual(values = c("None" = "#6495ED", "Killed" = "#FF8C70")) +
+  labs(title = "Age distributions by injury severity",
+       x = "Age", y = "Density") +
+  theme_minimal(base_size = 14) +
+  theme(strip.text = element_text(face = "bold"),
+        plot.title = element_text(face = "bold"),
+        legend.position = "none")
 
-n_none   <- length(x_none)
-n_killed <- length(x_killed)
+```
 
-for (b in 1:B) {
-  none_sev   <- rnorm(n_none,   mean = mu_none,   sd = sd_none)
-  killed_sev <- rnorm(n_killed, mean = mu_killed, sd = sd_killed)
-  diff[b] <- mean(none_sev) - mean(killed_sev)
+Right-skewed and we are dealing with continuous data (since it concerns the age) hence
+this implies a Gamma distribution. We need to fit a Gamma distribution and use the fitted residuals including the shape (alpha) and rate (beta). These two numbers completely determine the Gamma distribution (under the shape–rate parameterization). In the parametric bootstrap we plug in those estimated parameters and treat the fitted Gamma as our model for how ages were generated.
+
+```{r}
+
+fit_gamma_none   <- fitdistr(x_none,   "gamma")   # returns shape and rate
+fit_gamma_killed <- fitdistr(x_killed, "gamma")
+
+fit_gamma_none
+fit_gamma_killed
+
+B <- 20000                  
+diffs <- numeric(B)
+
+shape_none <- as.numeric(fit_gamma_none$estimate["shape"])
+rate_none  <- as.numeric(fit_gamma_none$estimate["rate"])
+shape_kill <- as.numeric(fit_gamma_killed$estimate["shape"])
+rate_kill  <- as.numeric(fit_gamma_killed$estimate["rate"])
+
+for(b in 1:B){
+  samp_none   <- rgamma(n_none,  shape = shape_none,  rate = rate_none)
+  samp_killed <- rgamma(n_killed, shape = shape_kill,  rate = rate_kill)
+  diffs[b] <- mean(samp_none) - mean(samp_killed)
 }
 
-CI_diff <- quantile(diff, probs = c(0.025, 0.975), na.rm = TRUE)
-list(diff_hat = diff_hat, CI_95 = CI_diff)
+ci <- quantile(diffs, probs = c(0.025, 0.975))
+mean_diff_boot <- mean(diffs)
 
+cat("Parametric bootstrap mean difference =", round(mean_diff_boot,3), "\n")
+cat("95% parametric-bootstrap percentile CI for mu_none - mu_killed:\n")
+print(round(ci,3))
+
+hist(diffs, breaks=60, main = expression("Parametric bootstrap distribution of the mean age difference " *
+                       (mu[none] - mu[killed])),
+     xlab = expression(mu[none] - mu[killed]))
+abline(v = ci, col = "red", lwd=2)
+abline(v = mean_diff_boot, col = "blue", lwd=2)
+legend("topright", legend=c("95% CI","bootstrap mean"), col=c("red","blue"), lwd=2)
 ```
 Negative result interval indicated that 'None' injury severity group are younger on average than 'Killed' group occupants. Difference is 7.5-10 years.
 
@@ -427,6 +474,24 @@ z <- c(x, y)
 mn <- length(z)
 
 t.obs <- as.numeric(t.test(x, y)$statistic)
+t.obs
+```
+
+3. Use non parametric bootstrap to test the hypothesis that the proportion of male and female that use
+seat belt in an accidents are equal.
+
+```{r}
+set.seed(33)
+B <- 2500
+f_none   <- 2863
+f_belted <- 9385
+m_none   <- 4781
+m_belted <- 9188
+nF <- f_none + f_belted
+nM <- m_none + m_belted
+x <- c(rep(1, f_belted), rep(0, f_none))
+y <- c(rep(1, m_belted), rep(0, m_none))
+t.obs <- as.numeric(t.test(x, y)$statistic)
 t.boot <- numeric(B)
 for (b in seq_len(B)) {
   z.b <- sample(z, size = mn, replace = TRUE)
@@ -448,58 +513,67 @@ for (b in seq_len(B)) {
 ci_boot <- quantile(diff.boot, probs = c(0.025, 0.975))
 cat("Observed t-statistic:", t.obs, "\n")
 cat("Pmc (one-sided, upper):", Pmc, "\n")
-cat("Bootstrap 95% percentile CI for (pi_F - pi_M):", ci_boot[1], "to", ci_boot[2], "\n")
-hist(diff.boot, breaks = 40, main = expression("Bootstrap distribution of " ~ hat(pi)[F] - hat(pi)[M]), xlab = expression(hat(pi)[F] - hat(pi)[M]))
+cat("Non-parametric bootstrap 95% percentile CI for (pi_F - pi_M):", ci_boot[1], "to", ci_boot[2], "\n")
+hist(diff.boot, breaks = 40, main = expression("Non-parametric bootstrap distribution of " ~ hat(pi)[F] - hat(pi)[M]), xlab = expression(hat(pi)[F] - hat(pi)[M]))
 abline(v = mean(diff.boot), col = "blue", lwd = 2)
 abline(v = ci_boot, col = "darkgreen", lwd = 2, lty = 2)
 
 ```
 
-3. Use non parametric bootstrap to test the hypothesis that the proportion of male and female that use
-seat belt in an accidents are equal.
-
-```{r}
-set.seed(33)
-B <- 10000
-n <- nrow(d_gender)
-index <- 1:n
-
-delta_obs <- mean(d_gender$seatbelt01[d_gender$sex == "M"]) - mean(d_gender$seatbelt01[d_gender$sex == "F"])
-delta_star <- numeric(B)
-
-# resample rows 
-for (b in 1:B) {
-  idx <- sample(index, size = n, replace = TRUE)
-  d_b <- d_gender[idx, ]
-  delta_star[b] <- mean(d_b$seatbelt01[d_b$sex == "M"]) - mean(d_b$seatbelt01[d_b$sex == "F"])
-}
-
-p_val <- mean(abs(delta_star) >= abs(delta_obs), na.rm = TRUE)
-c(delta_obs = delta_obs, p_value = p_val)
-
-```
-
 4. Use parametric bootstrap construct a 95% confident interval for πM−πF.
 
-```{r}
+```{r warning=FALSE}
 set.seed(33)
-B <- 10000
-
-pi_M_hat <- mean(d_gender$seatbelt01[d_gender$sex == "M"])
-pi_F_hat <- mean(d_gender$seatbelt01[d_gender$sex == "F"])
-
-nM <- sum(d_gender$sex == "M")
-nF <- sum(d_gender$sex == "F")
-
-delta_par <- numeric(B)
-
-for (b in 1:B) {
-  yM <- rbinom(nM, size = 1, prob = pi_M_hat)
-  yF <- rbinom(nF, size = 1, prob = pi_F_hat)
-  delta_par[b] <- mean(yM) - mean(yF)
+B <- 20000
+f_none   <- 2863
+f_belted <- 9385
+m_none   <- 4781
+m_belted <- 9188
+nF <- f_none + f_belted
+nM <- m_none + m_belted
+pF_hat <- f_belted / nF
+pM_hat <- m_belted / nM
+diff.boot <- numeric(B)
+for (b in seq_len(B)) {
+  xF_sim <- rbinom(1, nF, pF_hat)
+  xM_sim <- rbinom(1, nM, pM_hat)
+  diff.boot[b] <- (xM_sim / nM) - (xF_sim / nF)   # pi_M - pi_F
 }
 
-CI_delta <- quantile(delta_par, probs = c(0.025, 0.975), na.rm = TRUE)
-list(delta_hat = pi_M_hat - pi_F_hat, CI_95 = CI_delta)
+ci_param <- quantile(diff.boot, probs = c(0.025, 0.975))
+obs_diff <- pM_hat - pF_hat
+
+print(c(ci_param, obs_diff))
+
+dens <- density(diff.boot)
+ymax <- max(dens$y)
+y_obs <- approx(dens$x, dens$y, xout = obs_diff)$y
+df <- data.frame(diff = diff.boot)
+
+ggplot(df, aes(x = diff)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 80, fill = "#6495ED", alpha = 0.6, color = NA) +
+  geom_line(data = data.frame(x = dens$x, y = dens$y), aes(x = x, y = y), color = "#FF8C00", size = 1) +
+  geom_vline(xintercept = obs_diff, linetype = "dashed", size = 1, color = "black") +
+  geom_vline(xintercept = ci_param[1], linetype = "dotted", size = 1, color = "darkgreen") +
+  geom_vline(xintercept = ci_param[2], linetype = "dotted", size = 1, color = "darkgreen") +
+  geom_segment(aes(x = obs_diff, xend = obs_diff, y = y_obs + ymax*0.02, yend = y_obs + ymax*0.08),
+               color = "black", size = 0.6) +
+  geom_label(aes(x = obs_diff, y = y_obs + ymax*0.095, 
+                 label = sprintf("Observed\n%.4f", obs_diff)),
+             fill = "white", label.size = 0.2, size = 3, hjust = 0.5) +
+  annotate("text", x = ci_param[1], y = ymax * 0.62, label = sprintf("%.4f", ci_param[1]), hjust = 0.5, size = 3) +
+  annotate("text", x = ci_param[2], y = ymax * 0.62, label = sprintf("%.4f", ci_param[2]), hjust = 0.5, size = 3) +
+  labs(
+    title = expression("Parametric bootstrap: " ~ pi[M] - pi[F] ~ "(B = 20000)"),
+    x = expression(pi[M] - pi[F]),
+    y = "Density"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+    plot.margin = unit(c(1, 1, 1.5, 1), "lines"),
+    panel.grid.minor = element_blank()
+  ) +
+  coord_cartesian(clip = "off")
 ```
 
